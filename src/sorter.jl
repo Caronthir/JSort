@@ -1,42 +1,15 @@
 using .JSort
 import CSV
+import DelimitedFiles: writedlm
+using Polynomials
 
 const E_MIN = 5  # E Threshold
-
-function correlate(event::Event)::Union{Nothing, MiniEvent}
-    foundevent = false
-    let minievent
-        for Δei in 1:event.Δenum
-            Δe = event.Δe[Δei]
-            for ei in 1:event.enum
-                e = event.e[ei]
-                back = e.channel
-                if Δe.associated_channel ≠ back
-                    continue
-                end
-                front = Δe.channel % 8
-                # We can only handle 1 correlated event
-                if foundevent
-                    return nothing
-                end 
-                foundevent = true
-                minievent = MiniEvent(front+1, back+1, Δe.channel, e.channel, Δe.data, e.data)
-            end
-        end
-        if foundevent
-            return minievent
-        else
-            return nothing
-        end
-    end
-end
-
 
 function sortevent!(matrices, event::Event, parameters::Parameters)
     #=
     Algorithm:
     For each ΔE, look for an E in the associated E-detector. If no E is found,
-    or multiple corelations are made, ignore this count.
+    or multiple correlations are made, ignore this count.
     =#
     minievent = correlate(event)
 
@@ -107,22 +80,8 @@ function sortevent!(matrices, event::Event, parameters::Parameters)
     # Do thick stuff here
 end
 
-function correlateevent(event::Event)
-    minievent = correlate(event)
-    isnothing(minievent) && return
-    labrs = LaBrEvent(minievent)
-    isgood = false
-    for (channel, labr) in eachlabr(event)
-        if islabrgood(labr)
-            isgood = true
-            push!(labrs.labr, ADCTDC(labr.channel, labr.adc, labr.tdc))
-        end
-    end
-    !isgood && return
-    return labrs
-end
 
-function makeeΔe(events::Array{TrueEvent, 1}, parameters::Parameters)
+function oldmakeeΔe(events::Array{TrueEvent, 1}, parameters::Parameters)
     meΔe = OMatrix{Array{Int64, 2}}((NUMBINS_E, NUMBINS_E), max=(MAX_E, MAX_ΔE))
     meΔebf = [OMatrix{Array{Int64, 2}}((NUMBINS_E, NUMBINS_E), max=(MAX_E, MAX_ΔE))
               for f in 1:8, b in 1:8]
@@ -138,23 +97,102 @@ function makeeΔe(events::Array{TrueEvent, 1}, parameters::Parameters)
     #save(meΔe, "mede", parameters.savepath)
     for b in 1:8, f in 1:8
         #save(meΔebf[b, f], "medeb$(b)f$f", parameters.savepath)
-        CSV.write(parameters.savepath * "/medeb$(b)f$f.csv", meΔebf_raw[b, f])
+        path = joinpath(getpath(parameters, :savepath), "/medeb$(b)f$f.csv")
+        CSV.write(path, meΔebf_raw[b, f])
     end
     meΔe, meΔebf
 end
 
-function makelabr(events::Array{TrueEvent, 1}, parameters::Parameters)
-    gamma_e = OMatrix{Array{Int64, 2}}((2000, 32), max=(14000, 32))
-    gamma_t = OMatrix{Array{Int64, 2}}((500, 32))
-    for event in events
-        for gamma in event.labr
-            e = calibrate(gamma.adc, 0, 5)
-            t = calibrate(gamma.tdc/8, 0, 1)
-            increment!(gamma_e, e, gamma.channel)
-            increment!(gamma_t, t, gamma.channel)
+function makeeΔe(events::AbstractVector{TrueEvent}, parameters::Parameters; docalibrate=true)
+    eΔe = [Tuple{Float32, Float32}[] for f in 1:8, b in 1:8]
+    ecalibrators  = parameters.calibrator[:e]
+    Δecalibrators = parameters.calibrator[:Δe]
+    e = Δe = 0.0
+    for (i, event) in enumerate(events)
+        e  = ecalibrators[event.f, event.b](event.e)
+        Δe = Δecalibrators[event.f, event.b](event.Δe)
+        push!(eΔe[event.f, event.b], (e, Δe))
+    end
+    for f in 1:8
+        total = Tuple{Float32, Float32}[]
+        for b in 1:8
+            path = joinpath(getpath(parameters, :savepath), "edeb$(b)f$(f).csv")
+            # Stupid writedlm syntax
+            data = []
+            push!(data, ("e", "de"))
+            append!(data, eΔe[f, b])
+            open(path, "w") do io
+                writedlm(io, data, ',')
+            end
+            append!(total, eΔe[f, b])
+        end
+        path = joinpath(getpath(parameters, :savepath), "edef$(f).csv")
+        data = []
+        push!(data, ("e", "de"))
+        append!(data, total)
+        open(path, "w") do io
+            writedlm(io, data, ',')
         end
     end
-    save(gamma_e, "gammae", parameters.savepath)
-    save(gamma_t, "gammat", parameters.savepath)
-    return gamma_e, gamma_t
 end
+
+function makeeΔebin(events::AbstractVector{TrueEvent}, parameters::Parameters; T=Float32)
+    eΔe = [Tuple{T, T}[] for f in 1:8, b in 1:8]
+    ecalibrators  = parameters.calibrator[:e]
+    Δecalibrators = parameters.calibrator[:Δe]
+    e = Δe = 0.0
+    for (i, event) in enumerate(events)
+        e  = ecalibrators[event.f, event.b](event.e)
+        Δe = Δecalibrators[event.f, event.b](event.Δe)
+        push!(eΔe[event.f, event.b], (e, Δe))
+    end
+    for f in 1:8
+        path = joinpath(getpath(parameters, :savepath), "edef$(f).bin")
+        iototal = open(path, "w")
+        # Write the total length
+        totallength = length.(eΔe[f, :]) |> sum |> T
+        write(iototal, totallength)
+        for b in 1:8
+            path = joinpath(getpath(parameters, :savepath), "edeb$(b)f$(f).bin")
+            data = eΔe[f, b]
+            # Stupid writedlm syntax
+            open(path, "w") do io
+                write(io, length(data) |> T)
+                write(io, data)
+            end
+            # Append to the summed data
+            write(iototal, data)
+        end
+        close(iototal)
+    end
+end
+
+function makelabr(events::AbstractVector{TrueEvent}, parameters::Parameters; docalibrate=true)
+    # TODO: OMatrices are *almost* useless
+    # Use long arrays instead
+    #gamma_e = OMatrix{Array{Int64, 2}}((2000, 32), max=(14000, 32))
+    #gamma_t = OMatrix{Array{Int64, 2}}((500, 32))
+    channels = 1:33
+    Γe = Dict(i => Float32[] for i in channels)
+    Γt = Dict(i => Float32[] for i in channels)
+
+    ecalibrators = parameters.calibrator[:γ]
+    tcalibrators = parameters.calibrator[:t]
+    @debug "Making LaBr gamma events"
+    e = 0.0
+    t = 0.0
+    for event in events
+        for γ in event.labr
+            e = ecalibrators[γ.channel+1](γ.adc)
+            t = tcalibrators[γ.channel+1](γ.tdc/8)
+            #increment!(gamma_e, e, gamma.channel)
+            push!(Γe[γ.channel+1], e)
+            push!(Γt[γ.channel+1], t)
+            #increment!(gamma_t, t, gamma.channel)
+        end
+    end
+    #save(gamma_e, "gammae", getpath(parameters, :savepath))
+    #save(gamma_t, "gammat", getpath(parameters, :savepath))
+    return Γe, Γt
+end
+

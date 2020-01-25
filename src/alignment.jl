@@ -42,7 +42,26 @@ function lastnonzero(spectrum)
     end
 end
 
-function goodchannels(matrix, lastzerolimit=100, deviationlimit=10)::Vector{Int}
+function goodchannels(matrix::T; lastzerolimit=100, deviationlimit=10)::Vector{Int} where T <: Dict
+    good = Int[]
+    means = Float64[]
+    sizes = Int[]
+    for (channel, values) in matrix
+        last = lastnonzero(values)
+        isnothing(last) && continue
+        last > lastzerolimit && continue
+        push!(good, channel)
+        push!(means, mean(values))
+        push!(sizes, size(values, 1))
+    end
+    # Second pass to remove those with abnormal mean
+    M = mean(means)
+    deviation = @. 1/(sizes - 1)*√((means - M)^2)
+
+    good[deviation .< deviationlimit] |> sort
+end
+
+function goodchannels(matrix; lastzerolimit=100, deviationlimit=10)::Vector{Int}
     good = Int[]
     means = Float64[]
     for i in 1:size(matrix, 2)
@@ -58,37 +77,6 @@ function goodchannels(matrix, lastzerolimit=100, deviationlimit=10)::Vector{Int}
     good[deviation .< deviationlimit]
 end
 
-function leastsquares(X, Y, Ω, order::Symbol = :linear)
-    if order == :linear
-	    X = [ones(length(X)) X]
-    elseif order == :quadratic
-	    X = [ones(length(X)) X X.^2]
-    else
-        error("Unsupported order $terms")
-    end
-
-    if ndims(Ω) == 1
-        Ω = diagm(0 => Ω)
-    end
-    w
-
-    w = inv(Ω)  # Weights defined as 1/σ²
-    Xᵀ = transpose(X)
-    kω = inv(Xᵀ*w*X)*Xᵀ*w
-	coeffs = kω*Y
-    Σ = kω*Ω*kω'
-    coeffs, Σ
-end
-
-function leastsquares(x, y; order::T = 1) where T<: Integer
-    X = ones((length(x), order+1))
-    for n in 1:order
-        X[:, n+1] = x.^n
-    end
-
-    Xᵀ = transpose(X)
-    inv(Xᵀ*X)*Xᵀ*y
-end
 
 function linearalign(X, ref; numpeaks=2)
     peaks = findpeaks(X, numpeaks=numpeaks)
@@ -103,25 +91,31 @@ function linearalign(X, ref, region; numpeaks=2)
 end
 
 
-function alignspectra(spectra; lowregion=nothing, highregion=nothing, 
+function alignspectra(spectra, energyedges; lowregion=nothing, highregion=nothing, 
                       lowregionwidth=250, highregionwidth=120, lownumregions=10,
                       highnumregions=2, lowsmoother=nothing, highsmoother=nothing,
                       lowsearchwidth=50, highsearchwidth=500, referenceindex=1, order=2)
     if isnothing(lowregion)
         lowregion = 1:length(spectra[1])
     end
-    
-    coefficients = []
-    aligned = []
+
     reference = spectra[referenceindex]
+    coefficients = Vector{Float64}[]
+    aligned = Vector{Int}[]
     for i in eachindex(spectra)
-        i == referenceindex && continue
+        if i == referenceindex
+            push!(coefficients, [0.0, 1.0, 0.0])
+            push!(aligned, reference)
+            continue
+        end
+
         target = spectra[i]
         referencepeaks, targetpeaks = featurealign(reference, target, 
                                                    width=lowregionwidth,
                                                    searchwidth=lowsearchwidth,
                                                    roi=lowregion, numregions=lownumregions,
                                                    smoother=lowsmoother)
+
         if !isnothing(highregion)
             refhigh, tarhigh = featurealign(reference, target, 
                                             width=highregionwidth,
@@ -132,8 +126,15 @@ function alignspectra(spectra; lowregion=nothing, highregion=nothing,
             push!(targetpeaks, tarhigh...)
         end
         shiftgain = leastsquares(targetpeaks, referencepeaks, order=order)
-        push!(coefficients, shiftgain)
         push!(aligned, gainshift(target, shiftgain...))
+
+        # Convert from index basis to energy basis
+        shift = first(energyedges)
+        gain = step(energyedges)
+        targetpeaks = targetpeaks.*gain .+ shift
+        referencepeaks = referencepeaks.*gain .+ shift
+        shiftgain = leastsquares(targetpeaks, referencepeaks, order=order)
+        push!(coefficients, shiftgain)
     end
     coefficients, aligned
 end

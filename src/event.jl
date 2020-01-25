@@ -27,21 +27,21 @@ mutable struct Event
     #
     # The SiRi front detector ADC values
     enum::Int8
-    e::Array{ADC, 1}
+    e::Vector{ADC}
 
     # The SiRi back detector ADC values
     Δenum::Int8
-    Δe::Array{ADC, 1}
+    Δe::Vector{ADC}
 
     # OSCAR TDC and ADC values
     # Uses a poor man's dict to avoid Julia's costly
-    # hashing. labrnum keeps the length of the 
+    # hashing. labrnum keeps the length of the
     # labrindices, and labrindices keeps the indices
     # /channels used in labr. Labr has the actual channels
     # and data
     labrnum::Int8 # Keeps track of how many labr are used
-    labrindices::Array{Int8, 1} 
-    labr::Array{ADCTDC, 1}
+    labrindices::Vector{Int8}
+    labr::Vector{ADCTDC}
     # labr::Dict{UInt32, ADCTDC}
 
     # Wall clock time
@@ -124,6 +124,10 @@ function adde!(event, channel, data)
 end
 
 function addΔe!(event, channel, data)
+    # HACK This is a bug. Sometimes it gets greater than 17 and crashes
+    if event.Δenum == 16
+        return
+    end
     event.Δenum += 1
     event.Δe[event.Δenum].channel = channel
     event.Δe[event.Δenum].associated_channel = div(channel, 8)
@@ -171,7 +175,7 @@ end
 
 struct LaBrEvent
     mevent::MiniEvent
-    labr::Array{ADCTDC, 1}
+    labr::Vector{ADCTDC}
     function LaBrEvent(event::Event, mevent::MiniEvent)
         new(mevent, filter(x -> !islabrgood(x), event.labr[event.labrindices[1:event.labrnum]]))
     end
@@ -197,8 +201,22 @@ struct TrueEvent
     b::Int8
     Δe::Float32
     e::Float32
-    labr::Array{ADCTDC, 1}
+    labr::Vector{ADCTDC}
     function TrueEvent(f, b, de, e, labr)
         new(f, b, de, e, labr)
     end
+end
+
+function save(labrs::AbstractArray{LaBrEvent}, path::AbstractString)
+    # Terrible performance. Concoct some smarter way to save data
+    !isdir(path) && mkdir(path)
+    fhandle = open(joinpath(path, "labr.bin"), "w")
+    for labr in labrs
+        header, body = serialize(labr)
+        write(fhandle, header)
+        for b in body
+            write(fhandle, b...)
+        end
+    end
+    close(fhandle)
 end

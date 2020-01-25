@@ -6,9 +6,7 @@ using ProgressMeter
 using Printf
 using Profile
 using Traceur
-
-#TODO Allocating a new event each iteration is horribly inefficient. 
-#     Rewrite entire event object.
+import Base.read
 
 function processfile(path::T, parameters::Parameters) where T<:AbstractString
     if nworkers() > 1
@@ -49,13 +47,10 @@ function processfile_parallel(path, parameters::Parameters)
     return matrices
 end
 
-function processfile_serial(path, parameters)
+function processfile_serial(path::AbstractString, parameters::Parameters)
     filesize = stat(path).size
     contentsize = ceil(Int64, parameters.percent/100*filesize)
     progresschannel = Channel{Int64}(256)
-    print("Constructing matrices...")
-    #matrices = creatematrices(Array)
-    println("done.")
     # AARGH! Why doesn't progressmeter work!?
     # Changed the size to 2 to force the thread to write
     @async showprogress(progresschannel, 10)
@@ -64,7 +59,7 @@ function processfile_serial(path, parameters)
     return labrevents
 end
 
-function processfilechunk!(path, start, stop, progresschannel, parameters)
+function processfilechunk!(path, start, stop, progresschannel, parameters::Parameters)
     #=
     Algorithm: Go the the chunk in the file and read the bytes as unsigned int 32.
     Step through the words to find header words. The header contains the length
@@ -94,6 +89,7 @@ function processfilechunk!(path, start, stop, progresschannel, parameters)
 
     i = 1
     event = Event()
+    event_counter = 1
     labrevents = LaBrEvent[]
     while i < length(words)
         if isheader(words[i])
@@ -143,7 +139,7 @@ function processfilechunk!(path, start, stop, progresschannel, parameters)
     return labrevents, numevents, validwords/length(words), unreadable_words/length(words), rejected_words/length(words)
 end
 
-function unpack!(event, packet)::Bool
+function unpack!(event::Event, packet)::Bool
     reset!(event)
     for i in eachindex(packet)
         word = packet[i]
@@ -241,8 +237,13 @@ function decodeword!(event::Event, word, nextword)::Bool
         adde!(event, channel, data)
     elseif boxnum == 0x22
         # Energy of ΔE1 ch 0-31
-        addΔe!(event, channel, data)
-    elseif boxnum == 0x23
+        # try
+          addΔe!(event, channel, data)
+    #     catch e
+    #         @show e
+    #         @show event
+    #     end
+    # elseif boxnum == 0x23
         # Energy of ΔE2 ch 32-61
         addΔe!(event, channel+32, data)
     else
@@ -253,7 +254,7 @@ end
 
 function removepileup!(event::Event)
     # If an event has multiple Δe corresponding to the same back detector, remove them
- 
+
     # Find all duplicates and store their index
     bad_id = Set{Int8}()
     final = event.Δenum
@@ -271,11 +272,10 @@ function removepileup!(event::Event)
         return
     end
     # Move all elements down, except those with
-    # bad index. A byproduct is that the 
-    # elements not overwritten remains, 
+    # bad index. A byproduct is that the
+    # elements not overwritten remains,
     # but this should not interfere as the
     # counter shows the correct end
-    
     event.Δenum = 0
     for i in Int8(1):Int8(final)
         if i ∉ bad_id
@@ -289,6 +289,49 @@ function removepileup!(event::Event)
     end
 end
 
+
+function correlate(event::Event)::Union{Nothing, MiniEvent}
+    foundevent = false
+    let minievent
+        for Δei in 1:event.Δenum
+            Δe = event.Δe[Δei]
+            for ei in 1:event.enum
+                e = event.e[ei]
+                back = e.channel
+                if Δe.associated_channel ≠ back
+                    continue
+                end
+                front = Δe.channel % 8
+                # We can only handle 1 correlated event
+                if foundevent
+                    return nothing
+                end
+                foundevent = true
+                minievent = MiniEvent(front+1, back+1, Δe.channel, e.channel, Δe.data, e.data)
+            end
+        end
+        if foundevent
+            return minievent
+        else
+            return nothing
+        end
+    end
+end
+
+function correlateevent(event::Event)
+    minievent = correlate(event)
+    isnothing(minievent) && return
+    labrs = LaBrEvent(minievent)
+    isgood = false
+    for (channel, labr) in eachlabr(event)
+        if islabrgood(labr)
+            isgood = true
+            push!(labrs.labr, ADCTDC(labr.channel, labr.adc, labr.tdc))
+        end
+    end
+    !isgood && return
+    return labrs
+end
 
 function showprogress(channel, max)
     progress = Progress(max, "Unpacking events: ")

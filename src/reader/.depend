@@ -1,0 +1,3 @@
+test.o: test.cpp reader.h event.h
+reader.o: reader.cpp reader.h event.h
+event.o: event.cpp event.h
