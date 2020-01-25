@@ -9,6 +9,11 @@ Reader::Reader(cstring readpath, cstring savepath){
     filesize = std::filesystem::file_size(readpath);
     //destination.open(savepath, std::ios::out | std::ios::binary | std::ios::trunc);
     destination = fopen(savepath.c_str(), "wb");
+
+    for (std::size_t i = 0; i < BUFFER_SIZE_OUT; ++i) {
+        output[i] = LaBrEvent();
+    }
+
 }
 
 Reader::~Reader(){
@@ -53,7 +58,7 @@ bool Reader::read(){
 
 bool Reader::readPacket(size_t& i){
     // Read the packet and move the index to the next word after the packet end.
-    unsigned int packet_size = ndw(input[i]);
+    const unsigned int packet_size = ndw(input[i]);
     if (i + packet_size >= BUFFER_SIZE) {
       std::cerr << "Incomplete chunk. Aborting" << std::endl;
       return false;
@@ -61,8 +66,8 @@ bool Reader::readPacket(size_t& i){
     bool success = event.unpack(&input[i + 1], packet_size);
     if (success) {
         // Correlate event and put into output buffer on success.
-        //success = event.correlateReject(output[current_output]);
-        success = false;
+        success = event.correlateReject(output[current_output]);
+        //success = false;
         if (success) {
             num_events++;
             valid_words += packet_size+1;

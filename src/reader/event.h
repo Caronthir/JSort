@@ -2,6 +2,7 @@
 #define EVENT_H
 
 #include <cstdint>
+#include <iostream>
 struct ADCTDC
 {
     unsigned int channel;
@@ -17,9 +18,13 @@ struct ADC
     int data;
 };
 
-class LaBrEvent {
+struct LaBrEvent {
 public:
-    LaBrEvent(){};
+    LaBrEvent(){
+        for (std::size_t i = 0; i < 32; ++i) {
+            labr[i] = ADCTDC();
+        }
+    };
     virtual ~LaBrEvent(){};
 
     int e = 0;

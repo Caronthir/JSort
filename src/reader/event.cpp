@@ -2,7 +2,14 @@
 #include <iostream>
 
 
-Event::Event() {}
+Event::Event() {
+    for(std::size_t i = 0; i < 32; i++){
+        e[i] = ADC();
+        de[i] = ADC();
+        labr[i] = ADCTDC();
+        labr_indices[i] = -1;
+    }
+}
 
 Event::~Event() {}
 
