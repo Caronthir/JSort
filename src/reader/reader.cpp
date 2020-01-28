@@ -1,7 +1,24 @@
 #include "reader.h"
 #include "event.h"
 #include <filesystem>
+#include <stdexcept>
 #include <stdio.h>
+#include <iostream>
+
+//#define DOLOG2
+#ifdef DOLOG2
+#define LOG(x) std::cout << x << std::endl;
+#define DBGS(x) do{x}while(0);
+#define HALT() do{char tmp; std::cin >> tmp;}while(0);
+#else
+#define LOG(x)                                                                 \
+  while (0) {                                                                  \
+  };
+#define DGBS(x)                                                                \
+  while (0) {                                                                  \
+  };
+#define HALT() while(0){};
+#endif
 
 Reader::Reader(cstring readpath, cstring savepath){
     inputpath = std::filesystem::path(readpath).filename();
@@ -28,9 +45,10 @@ bool Reader::read(){
     printf("%s\n", inputpath.c_str());
     printf("\e[?25l    ");
     while(readChunk()){
+        // Each chunk is BUFFER_SIZE long
         total_words += BUFFER_SIZE;
         size_t i = 0;
-        if(100*counter/num_buffers >= 94){break;}
+        //if(100*counter/num_buffers >= 94){break;}
         while(i < BUFFER_SIZE){
             word = input[i];
             if(isHeader(word)){
@@ -48,6 +66,7 @@ bool Reader::read(){
                     unreadable_words++;
                 }
             }
+            updateCounters();
         }
         counter++;
         printf("\r\r\r\r%3.1f%%", 100*counter/num_buffers);
@@ -63,31 +82,83 @@ bool Reader::readPacket(size_t& i){
       std::cerr << "Incomplete chunk. Aborting" << std::endl;
       return false;
     }
-    bool success = event.unpack(&input[i + 1], packet_size);
+    i++;
+    bool success = event.unpack(&input[i], packet_size);
     if (success) {
         // Correlate event and put into output buffer on success.
         success = event.correlateReject(output[current_output]);
         //success = false;
         if (success) {
             num_events++;
-            valid_words += packet_size+1;
+            valid_words += packet_size+1;  // +1 for the packet size
             current_output++;
             if (current_output >= BUFFER_SIZE_OUT)
                 write();
         }
-    } else {
-      rejected_words++;
     }
-    i += packet_size + 1;
+    if (!success){
+      rejected_words += packet_size + 1;
+    }
+    i += packet_size;
     return true;
 }
 
 bool Reader::readChunk(){
     size_t words_read = fread(input, sizeof(unsigned int), BUFFER_SIZE, source);
+    LOG("=*= READ " << words_read << " WORDS =*=");
     return words_read == BUFFER_SIZE;
 }
 
 void Reader::write(){
-    fwrite(&output, sizeof(LaBrEvent), current_output, destination);
+    if(current_output > BUFFER_SIZE_OUT)
+        throw(std::out_of_range("Buffer pointer outside of buffer"));
+
+    // e, de, front, back, labr_num
+    unsigned int header[5];
+    ADCTDC* body;
+    for (std::size_t i = 0 ; i < current_output; ++i) {
+        output[i].serialize(header, &body);
+        LOG(header[0] << "\t" << header[1] << "\t"
+            << header[2] << "\t" << header[3] << "\t"
+            << header[4]);
+        HALT();
+
+        // DBGS(for(int i = 0; i < header[4]; i++){};
+        //     std::cout << body[i].channel << "\t"
+        //               << body[i].adc << "\t" << body[i].tdc << std::endl;
+        //     });
+
+        fwrite(header, sizeof(header), 1, destination);
+        fwrite(body, sizeof(ADCTDC), header[4], destination);
+    }
     current_output = 0;
+}
+
+void Reader::updateCounters(){
+    rejected_decoding       += event.rejected_decoding;
+    rejected_ede_correlate  += event.rejected_ede_correlate;
+    rejected_ede_empty      += event.rejected_ede_empty;
+    rejected_labr_correlate += event.rejected_labr_correlate;
+}
+
+std::string Reader::summary(){
+  double total = (double)total_words;
+  double R = (double)rejected_words;
+  R = (double)(rejected_decoding+rejected_ede_correlate+rejected_ede_empty+rejected_labr_correlate);
+  std::cout.imbue(std::locale(""));
+  std::cout << "Total words:      " << total_words << "\n"
+            << "Total events:     " << num_events << "\n"
+            << "Valid words:      " << valid_words / total * 100 << "%\n"
+            << "Unreadable words: " << unreadable_words / total * 100
+            << "%\n"
+            << "Rejected words:   " << rejected_words / total * 100 << "%\n"
+            << "    where\n"
+            << "    EΔE Correlate:  " << rejected_ede_correlate/R*100 << "%\n"
+            << "    LaBr Correlate: " << rejected_labr_correlate/R*100 << "%\n"
+            << "    Decoding:       " << rejected_decoding/R*100 << "%\n"
+            << "    EΔE Empty:      " << rejected_ede_empty/R*100 << "%\t( " << rejected_ede_empty <<  " )\n"
+            << "    Pileup:         " << rejected_pileup/(float)rejected_ede_empty
+            << "% of EΔE Empty  ( " << rejected_pileup  << " ) [ " << rejected_ede_empty - rejected_pileup << " ]\n"
+            << std::endl;
+  return "";
 }

@@ -37,6 +37,14 @@ public:
     void clear(){
         labr_num=0;
     }
+    inline void serialize(unsigned int* header, ADCTDC** body) {
+        header[0] = e;
+        header[1] = de;
+        header[2] = front;
+        header[3] = back;
+        header[4] = labr_num;
+        *body = labr;
+    }
 };
 
 class Event
@@ -55,6 +63,13 @@ public:
 
     std::size_t e_num = 0;
     std::size_t de_num = 0;
+
+    mutable bool rejected_ede_correlate  = false;
+    mutable bool rejected_labr_correlate = false;
+    bool rejected_ede_empty              = false;
+    bool rejected_decoding               = false;
+    bool rejected_pileup                 = false;
+    bool pileup_flag                     = false;
 
     bool unpack(unsigned int* packet, std::size_t size);
     bool decodeWord(unsigned int word);

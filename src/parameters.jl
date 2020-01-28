@@ -31,9 +31,18 @@ function Parameters(path::AbstractString)
     end
     root     = splitdir(path)[1]
     savepath = get("save path", root)
-    savepath = if savepath == root savepath else joinpath(root, savepath) end
+    if startswith(savepath, "~")
+        savepath = expanduser(savepath)
+    else
+        savepath = if savepath == root savepath else joinpath(root, savepath) end
+    end
+
     readpath = get("read path", savepath)
-    readpath = if readpath == savepath readpath else joinpath(root, readpath) end
+    if startswith(readpath, "~")
+        readpath = expanduser(readpath)
+    else
+        readpath = if readpath == savepath readpath else joinpath(root, readpath) end
+    end
     isotope  = get("isotope", "")
 
     cores = get("cpu cores", 1)

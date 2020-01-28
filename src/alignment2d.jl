@@ -1,13 +1,11 @@
-using JSort
+using .JSort
 using Statistics
 using Distributions: Poisson, rand
 import PyPlot; const plt = PyPlot
 import PyCall
-using ProgressBars
 using ImageFiltering: imfilter, imfilter!, Kernel
-using CSV: read
+import CSV
 using DataFrames
-using Polynomials
 using Base.Filesystem: splitext
 
 function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin", referenceid=1

@@ -302,19 +302,6 @@ function savegainshift_gamma(parameters::Parameters, filename::String, coefficie
     end
 end
 
-function save(labrs::AbstractArray{LaBrEvent}, path::AbstractString)
-    # Terrible performance. Concoct some smarter way to save data
-    !isdir(path) && mkdir(path)
-    fhandle = open(joinpath(path, "labr.bin"), "w")
-    for labr in labrs
-        header, body = serialize(labr)
-        write(fhandle, header)
-        for b in body
-            write(fhandle, b...)
-        end
-    end
-    close(fhandle)
-end
 
 function loadlabr(parameters::Parameters)::Vector{TrueEvent}
     return loadlabr(parameters.savepath)

@@ -148,4 +148,3 @@ end
 function yrange(matrix::OMatrix)
     range(matrix.miny, matrix.maxy, length=size(matrix.matrix, 2))
 end
-
