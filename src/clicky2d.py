@@ -68,7 +68,7 @@ class Clicky2D():
     def add_peak(self, peak):
         self.peaks.append(peak)
 
-    def add_peak_number(self, num):
+    def add_peak_number(self, num: int) -> None:
         numpeaks = len(self.peaks)
         numnums = len(self.peak_numbers)
         if numpeaks == 0:
@@ -145,6 +145,7 @@ class Clicky2D():
 
     def press_factory(self):
         press_wait_time = 2  # seconds
+
         def handle_keypress(event):
             if event.key == 'r':
                 self.pick()
@@ -172,6 +173,9 @@ class Clicky2D():
                 handle_keypress.digits = ''
                 handle_keypress.do_wait = True
                 handle_keypress.last_press = time.time()
+            if event.key == 'n':
+                plt.close('all')
+                return
 
         handle_keypress.last_press = 0
         handle_keypress.do_wait = False
@@ -266,12 +270,19 @@ def centerofmass(matrix, x, y):
     return xm, ym
 
 
+def read(fname: Path):
+    if fname.suffix == ".bin":
+        data = np.fromfile(fname, dtype="float32")
+        return data.reshape((-1, 2))
+    elif fname.suffix == ".csv":
+        return np.loadtxt(fname, delimiter=",", skiprows=1)
+
 
 if __name__ == "__main__":
-    data = np.loadtxt("/home/erdos/master/sortering/sirius/medeb1f8_2.csv", delimiter=",", skiprows=1)
+    data = read("../si/edef1.bin")
     hist, xedges, yedges = np.histogram2d(data[:, 0], data[:, 1], bins=1000)
     # x = np.linspace(0, 2, 10)
     # y = np.linspace(1, 4.5, 10)
     # vals = np.random.random((10, 10))
-    click = Clicky2D(hist, xedges, yedges)
+    click = GatePicker(hist, xedges, yedges)
     plt.show()

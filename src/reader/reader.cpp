@@ -43,6 +43,7 @@ bool Reader::read(){
     double num_buffers =  filesize/((float)BUFFER_SIZE*sizeof(unsigned int));
     int counter = 0;
     printf("%s\n", inputpath.c_str());
+    printf("Going to fill buffer %.2f times\n", num_buffers);
     printf("\e[?25l    ");
     while(readChunk()){
         // Each chunk is BUFFER_SIZE long
@@ -69,6 +70,9 @@ bool Reader::read(){
             updateCounters();
         }
         counter++;
+        //if (counter == 5064)
+        //    break;
+        //printf("\r\r\r\r\r\r\r\r\r\r%10i", total_words);
         printf("\r\r\r\r%3.1f%%", 100*counter/num_buffers);
     }
     printf("\e[?25h\n");
@@ -96,6 +100,7 @@ bool Reader::readPacket(size_t& i){
                 write();
         }
     }
+
     if (!success){
       rejected_words += packet_size + 1;
     }
@@ -114,10 +119,11 @@ void Reader::write(){
         throw(std::out_of_range("Buffer pointer outside of buffer"));
 
     // e, de, front, back, labr_num
-    unsigned int header[5];
+    unsigned int header[3];
+    unsigned int size;
     ADCTDC* body;
     for (std::size_t i = 0 ; i < current_output; ++i) {
-        output[i].serialize(header, &body);
+        output[i].serialize(header, &body, &size);
         LOG(header[0] << "\t" << header[1] << "\t"
             << header[2] << "\t" << header[3] << "\t"
             << header[4]);
@@ -129,7 +135,7 @@ void Reader::write(){
         //     });
 
         fwrite(header, sizeof(header), 1, destination);
-        fwrite(body, sizeof(ADCTDC), header[4], destination);
+        fwrite(body, sizeof(ADCTDC), size, destination);
     }
     current_output = 0;
 }

@@ -1,5 +1,9 @@
 abstract type Weight end
 
+#=
+    Sum over the bins that are within `threshold`% of the minimum.
+    A large value means the well is shallow.
+=#
 struct ThresholdSum <: Weight
     threshold::Float64
     function ThresholdSum(threshold::Real)
@@ -8,12 +12,35 @@ struct ThresholdSum <: Weight
     end
 end
 
+#=
+  Sum over the bins that are within the rectangle inscribing the
+  the bins which are `threshold`% of the minimum.
+  A large value means the well is shallow. Punished asymmetric wells
+  more than ThresholdSum
+=#
 struct ThresholdArea <: Weight
     threshold::Float64
     function ThresholdArea(threshold::Real)
         0 < threshold && return new(1.0 + threshold)
         throw(ArgumentError("Threshold must be less than 1"))
     end
+end
+
+struct ThresholdSumShift <: Weight
+    threshold::Float64
+    shift::Float64
+    function ThresholdSumShift(threshold::Real)
+        0 < threshold && return new(1.0 + threshold, 1.0)
+        throw(ArgumentError("Threshold must be less than 1"))
+    end
+end
+
+#=
+   Sum over the bins within the `radius` distance of the
+   minimum, minus the minimum. A high score means the well is sharp.
+=#
+struct WellSum <: Weight
+    radius::Int
 end
 
 function (w::ThresholdSum)(x)
@@ -45,4 +72,21 @@ function (w::ThresholdArea)(x)
     sidex = maxx - minx
     sidey = maxy - miny
     (sidex > 0 ? sidex : 1) * (sidey > 0 ? sidey : 1)
+end
+
+function (w::ThresholdSumShift)(x)
+    min = minimum(x) + w.shift
+    sum(x .≤ w.threshold*min)
+end
+
+function (w::WellSum)(x)
+    truth = argmin(x)
+    r = w.radius
+    xstart, ystart = truth.I .- r
+    xstop, ystop = truth.I .+ r
+    xstart = xstart > 0 ? xstart : 1
+    ystart = ystart > 0 ? ystart : 1
+    xstop = xstop < size(x, 1) ? xstop : size(x, 1)
+    ystop = ystop < size(x, 2) ? ystop : size(x, 2)
+    sum(@view x[xstart:xstop, ystart:ystop]) - minimum(x)
 end

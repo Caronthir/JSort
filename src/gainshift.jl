@@ -54,10 +54,6 @@ function gainshift!(m::Array{T, 1}, shift, gain) where T <: Integer
     m .= tmp
 end
 
-function gainshift!(m::OMatrix{Array{T, 1}}, shift, gain, gain²) where T <: Integer
-    gainshift!(m.matrix, shift, gain, gain²)
-end
-
 function gainshift(m::Array{T, 1}, shift, gain, gain²) where T <: Integer
     tmp = zeros(T, size(m))
     first = firstindex(m)
@@ -95,27 +91,4 @@ function gainshift(m::Array{T, 1}, shift, gain, gain², gain³) where T <: Integ
         end
     end
     tmp
-end
-
-function gainshift(m::OMatrix{Array{T, 2}}, coeffsx, coeffxy) where T <: Integer
-    throw("Gainshift for OMatrix not yet implemented")
-end
-
-function calibrate(x, event::MiniEvent, value::Symbol, parameters::Parameters)::Float64
-    if value == :e || value == :Δe
-        coeffs = parameters.gainshift[value][event.back, event.front, :]::Array{Float64, 1}
-        return calibrate(x, coeffs...)
-    elseif value == :ex
-        coeffs = parameters.exfromeΔe[event.front, :]::Array{Float64, 1}
-        theoretical = calibrate(x, coeffs...) 
-        return parameters.excorr[event.front, 1] + theoretical*parameters.excorr[event.front, 2]
-    elseif value == :range
-
-    end
-    error("Unsupported symbol for calibration")
-end
-
-function calibrate(event::MiniEvent, value::Symbol, parameters::Parameters)::Float64
-    coeffs = parameters.gainshift[value][event.back, event.front, :]::Array{Float64, 1}
-    return calibrate(getfield(event, value), coeffs...)
 end

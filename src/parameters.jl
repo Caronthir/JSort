@@ -13,13 +13,13 @@ struct Parameters
     root::String
     readpath::String
     savepath::String
-    datafiles::Vector{String}
+    #datafiles::Vector{String}
     isotope::String
-    calibrationpaths::Dict{Symbol, String}
-    cores::Int
     gates::Dict{Symbol, Gate}
     calibrator::Dict{Symbol, AbstractCalibrator}
     percent::Float64
+    badchannels::Set{Int}
+    qkinz::Vector{Poly{Float32}}
 end
 
 function Parameters(path::AbstractString)
@@ -45,61 +45,94 @@ function Parameters(path::AbstractString)
     end
     isotope  = get("isotope", "")
 
-    cores = get("cpu cores", 1)
-
     # Different calibration coefficients
-    calibrationpaths = Dict{Symbol, String}(
-        :e  => get("coefficients e",     "ecoefficients.csv"),
-        :Δe => get("coefficients de",    "decoefficients.csv"),
-        :γ  => get("coefficients gamma", "gcoefficients.csv"),
-        :t  => get("coefficients time",  "tcoefficients.csv")
+    calibrationpaths = Dict{Symbol, Union{String, Vector{String}}}(
+        :e  => get("coefficients e",     "coefficients_e.csv"),
+        :Δe => get("coefficients de",    "coefficients_de.csv"),
+        :γ  => get("coefficients gamma", "coefficients_g.csv"),
+#        :γi => get("coefficients gamma inverse", "coefficients_g_i.csv"),
+        :t  => get("coefficients time",  "coefficients_t.csv"),
+        :tc => get("coefficients time correction", "coefficients_t_c.csv")
     )
     # Try to read from the coefficient paths, defaulting to identity polynomials
     calibrator = Dict{Symbol, AbstractCalibrator}(
-        :e  => makepcalibrator(calibrationpaths[:e], :e),
-        :Δe => makepcalibrator(calibrationpaths[:Δe], :Δe),
+        :e  => make(ParticleCalibrator, calibrationpaths[:e],  :e),
+        :Δe => make(ParticleCalibrator, calibrationpaths[:Δe], :Δe),
+        :γ  => make(GammaCalibrator,    calibrationpaths[:γ],  :eᵧ),
+#        :γi => make(GammaCalibrator,    calibrationpaths[:γi], :eᵧ),
+        :t  => make(TimeCalibrator,     calibrationpaths[:t],  :t),
+        :tc => make(TimeCorrector,      calibrationpaths[:tc], :t)
     )
 
     gates = getgates(get("gates", nothing))
 
     # Read the datafile paths
-    datafiles = get("data files", nothing)
-    if isnothing(datafiles)
-        @warn "No data files will be processed!"
-    else
-        map!(x -> joinpath(readpath, x), datafiles, datafiles)
-    end
+    # datafiles = get("data files", nothing)
+    # if isnothing(datafiles)
+    #     @warn "No data files will be processed!"
+    # else
+    #     map!(x -> joinpath(readpath, x), datafiles, datafiles)
+    # end
 
     percent = get("percent to read", 100)
 
+    # Qkinz
+    qkinz = get("qkinz", nothing) |> abspath |> parseqkinz
+
+    # Bad channels
+    badchannels = Set{Int}(i for i in get("channels to ignore", Set{Int}()))
+
+    atleast1d(x::AbstractArray) = x
+    atleast1d(x) = [x]
     for key in keys(parameters)
         if key ∉ readkeys
             @warn "The parameter $key was supplied but not used."
         end
+        if occursin("coefficient", key) || occursin("file", key)
+            paths = get(key, "") |> atleast1d
+            for path in paths
+              if !isfile(path)
+                  @warn "Could not open $key"
+              end
+            end
+        end
     end
 
-    Parameters(path, readpath, savepath, datafiles, isotope,
-               calibrationpaths, cores, gates, calibrator,
-               percent)
+    Parameters(path, readpath, savepath, isotope,
+               gates, calibrator,
+               percent, badchannels, qkinz)
 end
 
-function makepcalibrator(path, var)::ParticleCalibrator
+function make(::Type{T}, path::AbstractString, var)::T where T<:AbstractCalibrator
     if isfile(path)
-        read(path, ParticleCalibrator, var=var)
+        read(path, T, var=var)
     else
-        ParticleCalibrator(var=var)
+        T(var=var)
     end
+end
+
+function make(::Type{T}, paths::AbstractArray{<:AbstractString}, var)::T where T<:AbstractCalibrator
+    base = make(T, paths[1], var)
+    if length(paths) > 1
+      for path in paths[2:end]
+          calib = make(T, path, var)
+          combine!(base, calib)
+      end
+    end
+    base
 end
 
 ### PARSE GATES ###
-getgates(::Nothing) = Dict(:e => Gate(), :t => Gate())
+getgates(::Nothing) = Dict(:ex => Gate(), :t => Gate())
 function getgates(unparsedgates::AbstractDict)
     # Gates on the excitation energy
     ukeys = lowercase.(keys(unparsedgates))
     ekey =  ukeys ∩ ["ex", "excitation", "ex_int"]
-    tkey = ukeys ∩ ["t", "time", "na_t_c"]
+    promptkey = ukeys ∩ ["prompt"]
+    bgkey = ukeys ∩ ["bg", "background"]
 
-    gates = Dict{Symbol,Gate}(:ex => Gate(), :t => Gate())
+    gates = Dict{Symbol,Gate}(:ex => Gate(), :background => Gate(),
+                              :promt => Gate())
 
     if length(ekey) == 1
         for gate in unparsedgates[ekey[1]]
@@ -107,11 +140,15 @@ function getgates(unparsedgates::AbstractDict)
         end
     end
 
-    if length(tkey) == 1
-        gates[:t] = unparsedgates[tkey[1]] |> parsegate
+    if length(promptkey) == 1
+        gates[:prompt] = unparsedgates[promptkey[1]] |> parsegate
     end
 
-    if length(ukeys) > 0 && length(ekey ∪ tkey) == 0
+    if length(bgkey) == 1
+        gates[:background] = unparsedgates[bgkey[1]] |> parsegate
+    end
+
+    if length(ukeys) > 0 && length(ekey ∪ promptkey ∪ bgkey) == 0
         throw(IOError("Gates $ukeys not supported."))
     end
     gates
@@ -140,4 +177,22 @@ function parsegate(gate::AbstractArray)::Gate
         throw(ArgumentError("Prove an upper and lower limit for gate"))
     end
     return Gate(low=gate[1], high=gate[2])
+end
+
+## Parse Qkinz
+function parseqkinz(path::AbstractString)::Vector{Poly}
+    dir = dirname(path)
+    pattern = Regex(basename(path))
+    polys = Tuple{Int, Poly{Float64}}[]
+    j(x) = joinpath(dir, x)
+    for fname in readdir(dir)
+        m = match(pattern, fname)
+        if m ≢ nothing
+            f = parse(Int, m[:f])
+            push!(polys, (f, JSort.BetheBloch.Banana(j(fname)).exfromede))
+        end
+    end
+    (f, poly) = polys |> sort |> x -> zip(x...)
+    @assert length(f) == 8 "Missing Qkinz strips. Got $f"
+    [p for p in poly]
 end

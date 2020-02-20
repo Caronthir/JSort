@@ -3,6 +3,31 @@
 
 #include <cstdint>
 #include <iostream>
+
+
+inline unsigned int makeMask(int start, int stop) {
+    unsigned int m = 0;
+    for (int i = start; i < stop; i++) {
+        m = m | 1 << i;
+    }
+    return m;
+}
+inline unsigned int decodeMask(unsigned int j, int start, int stop){
+    unsigned int mask = makeMask(start, stop);
+    j = (j & mask) >> start;
+    return j;
+}
+
+inline unsigned int encode(unsigned int front, unsigned int back, unsigned int labrsize){
+    return front << 24 | back << 16 | labrsize;
+}
+
+inline void decode(unsigned int word, unsigned int* __restrict__ front, unsigned int* __restrict__ back, unsigned int* __restrict__ labrsize){
+    *front    = decodeMask(word, 24, 32);
+    *back     = decodeMask(word, 16, 24);
+    *labrsize = decodeMask(word, 0, 16);
+}
+
 struct ADCTDC
 {
     unsigned int channel;
@@ -37,12 +62,14 @@ public:
     void clear(){
         labr_num=0;
     }
-    inline void serialize(unsigned int* header, ADCTDC** body) {
+    inline void serialize(unsigned int * __restrict__ header, ADCTDC** body, unsigned int* __restrict__ size) {
         header[0] = e;
         header[1] = de;
-        header[2] = front;
-        header[3] = back;
-        header[4] = labr_num;
+        header[2] = encode(front, back, labr_num);
+        *size = labr_num;
+        // header[2] = front;
+        // header[3] = back;
+        // header[4] = labr_num;
         *body = labr;
     }
 };
@@ -53,12 +80,14 @@ public:
     Event();
     virtual ~Event();
 
-    ADC e[32];
-    ADC de[32];
-    ADCTDC labr[32];
+    /* I don't know how, but sometimes there are more than
+       32 'hits' in a single event. */
+    ADC e[64];
+    ADC de[64];
+    ADCTDC labr[64];
 
     // A map to correspond TDC and ADC to the same channel
-    int labr_indices[32];
+    int labr_indices[64];
     std::size_t labr_num = 0;
 
     std::size_t e_num = 0;

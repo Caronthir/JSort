@@ -3,52 +3,85 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from qkinz import Qkinz
-from itertools import product
+from itertools import zip_longest
 import threading
-from queue import Queue
 from sklearn.linear_model import LinearRegression
+import argparse
+import yaml
+from typing import Tuple, List, Callable
+
+
+Peaklist = Tuple[List[int], List[Tuple[int, int]]]
+array = np.ndarray
+Calibrator = Callable[[array], array]
 
 
 class Handler2D:
-    def __init__(self, path, qkinz_path, pattern=r"edef*.bin",
-                qkinz_pattern=r"28Si_strip*.txt"):
-        self.filename_pairs = self.load(path, qkinz_path, pattern, qkinz_pattern)
+    def __init__(self, path, qkinz_path, isotope, pattern=r"edef*.bin"):
+        path = Path(path)
+        self.filename_pairs = self.load(path, qkinz_path, pattern, isotope)
+        self.peaks_e_handle = (path/"peaks_e_m.csv").open("w")
+        self.peaks_Δe_handle = (path/"peaks_de_m.csv").open("w")
 
-    def load(self, path, qkinz_path, pattern, qkinz_pattern):
-        data = Path(path).glob(pattern)
-        qkinz = Path(qkinz_path).glob(qkinz_pattern)
+    def load(self, path, qkinz_path, pattern, isotope):
+        data = sorted(Path(path).glob(pattern))
+        protons = read_qkinz(qkinz_path, isotope+"_strip*.txt")
+        deutrons = read_qkinz(qkinz_path, isotope+"_d_strip*.txt")
+        tritons = read_qkinz(qkinz_path, isotope+"_t_strip*.txt")
 
         # Pair up the data with Qkinz calculations
-        pairs = []
-        for d, q in product(data, qkinz):
-            f = int(d.stem[-1])-1
-            fq = int(q.stem[-1])
-            if f == fq:
-                pairs.append((f, (d, q)))
-        pairs = sorted(pairs, key=lambda x: x[0])
-        return [(d, q) for _, (d, q) in pairs]
+        return [paired for paired in
+                zip_longest(data, protons, deutrons, tritons, fillvalue=None)]
 
     def doall(self):
         for front in range(8):
-            self.pick(front)
+            peaks = self.pick(front)
+            self.save_peaks(peaks, front)
+        self.peaks_e_handle.close()
+        self.peaks_Δe_handle.close()
 
     def pick(self, front: int):
-        data_fname, qkinz_fname = self.filename_pairs[front]
-        qkinz = Qkinz(qkinz_fname)
+        data_fname, *qkinz_fnames = self.filename_pairs[front]
+        qkinz = [Qkinz(path) for path in qkinz_fnames if path is not None]
         data = read(data_fname)
         hist, *edges = np.histogram2d(data[:, 0], data[:, 1], bins=1000)
         clicky = Clicky2D(hist, *edges)
 
         # Quality plot
-        fig, ax = plt.subplots(nrows=2)
+        #fig, ax = plt.subplots(nrows=2)
+        ax = None
 
         fit_thread = threading.Thread(target=Regressor, args=(clicky, qkinz, ax))
         fit_thread.start()
         clicky.ax.set_title(data_fname.stem)
-        qkinz.plot(ax=clicky.ax)
+        for q in qkinz:
+            q.plot(ax=clicky.ax)
 
+        clicky.ax.set_xlim([0, np.max(edges[0])])
+        clicky.ax.set_ylim([0, np.max(edges[1])])
         plt.show()
+
         clicky.queue.put(("STOP", ))
+        fit_thread.join()
+        peaks = clicky.queue.get()
+        return peaks
+
+    def save_peaks(self, peaks, front):
+        def serialize(x, y):
+            return ','.join([str(x), str(y)])
+        for e, Δe, qe, qΔe in zip(*peaks):
+            print(f"Saving {e, Δe, qe, qΔe}")
+            self.peaks_e_handle.write(f"{front},{serialize(e, qe)}\n")
+            self.peaks_Δe_handle.write(f"{front},{serialize(Δe, qΔe)}\n")
+            self.peaks_e_handle.flush()
+            self.peaks_Δe_handle.flush()
+
+def read_qkinz(path: Path, pattern: str):
+    if not path.exists():
+        return []
+    qkinz = Path(path).glob(pattern)
+    qkinz = list(sorted(qkinz))
+    return qkinz
 
 
 class Regressor:
@@ -57,20 +90,26 @@ class Regressor:
         self.qkinz = qkinz
         self.queue = clicky.queue
         self.ax = ax
+        self.peaks_e = []
         self.run()
 
     def run(self):
         while True:
-            peaks = self.queue.get()
+            peaks: Peaklist = self.queue.get()
             if peaks[0] == "STOP":
+                self.queue.put(self.peaks_e)
                 return
+            self.peaks_e = self.peaks_to_e(peaks)
 
             coefficients, (calib_e, calib_Δe) = self.regress(peaks, True)
-            self.plot_quality(peaks, calib_e, calib_Δe)
+            #self.plot_quality(peaks, calib_e, calib_Δe)
             coefficients, (calib_e, calib_Δe) = self.regress(peaks, False)
-            self.qkinz.calibrate(calib_e, calib_Δe)
+            for qkinz in self.qkinz:
+                qkinz.calibrate(calib_e, calib_Δe)
 
-    def regress(self, peaks, etoq=True):
+    def regress(self, peaks: Peaklist, etoq=True) ->\
+        Tuple[Tuple[List[float], List[float]],
+              Tuple[Calibrator, Calibrator]]:
         e, Δe, qe, qΔe = self.peaks_to_e(peaks)
 
         coeff_e = []
@@ -78,6 +117,7 @@ class Regressor:
 
         def fitshift(X, y):
             return y[0] - X[0], lambda x: x + (y[0] - X[0])
+
         def fitlinear(X, y):
             X = X.reshape(-1, 1)
             reg = LinearRegression().fit(X, y)
@@ -89,12 +129,13 @@ class Regressor:
             e, qe = qe, e
             qΔe, Δe = Δe, qΔe
 
-        coeff_e, predict_e  = fit(e, qe)
+        coeff_e, predict_e = fit(e, qe)
         coeff_Δe, predict_Δe = fit(Δe, qΔe)
 
         return (coeff_e, coeff_Δe), (predict_e, predict_Δe)
 
-    def peaks_to_e(self, peaks):
+    def peaks_to_e(self, peaks: Peaklist) ->\
+        Tuple[array, array, array, array]:
         peaks = list(zip(*peaks))
         peaks = sorted(peaks, key=lambda x: x[0])
         peaks = list(zip(*peaks))
@@ -105,7 +146,7 @@ class Regressor:
         qe, qΔe = [], []
 
         for i, n in enumerate(qkinznum):
-            row = self.qkinz.data_.iloc[n]
+            row = self.qkinz[0].data_.iloc[n]
             qe.append(row.e)
             qΔe.append(row.Δe)
             # Convert from indices to energy
@@ -120,7 +161,8 @@ class Regressor:
 
         return e, Δe, qe, qΔe
 
-    def plot_quality(self, peaks, calib_e, calib_Δe):
+    def plot_quality(self, peaks: Peaklist,
+                     calib_e: Calibrator, calib_Δe: Calibrator):
         e, Δe, qe, qΔe = self.peaks_to_e(peaks)
         self.ax[0].cla()
         self.ax[1].cla()
@@ -137,16 +179,23 @@ class Regressor:
         self.ax[0].figure.canvas.draw_idle()
 
 
-
 def read(fname: Path):
     if fname.suffix == ".bin":
         data = np.fromfile(fname, dtype="float32")
-        return data[1:].reshape((int(data[0]), 2))
+        return data.reshape((-1, 2))
     elif fname.suffix == ".csv":
         return np.loadtxt(fname, delimiter=",", skiprows=1)
 
 
 if __name__ == '__main__':
-    handler = Handler2D("/home/erdos/master/sortering/sirius/",
-                        "/home/erdos/master/sortering/qkinz/")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("configfile")
+    args = parser.parse_args()
+    config = yaml.load(open(args.configfile, "r"), Loader=yaml.Loader)
+    path = Path(config["read path"])
+    # handler = Handler2D("/home/erdos/master/sortering/sirius/",
+    #                     "/home/erdos/master/sortering/qkinz/")
+    qkinzpath = path/"qkinz"
+    assert qkinzpath.exists()
+    handler = Handler2D(path, qkinzpath, isotope=config['isotope'])
     handler.doall()

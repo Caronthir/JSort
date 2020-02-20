@@ -1,4 +1,3 @@
-
 struct Material
     Z::Int
     A::Int

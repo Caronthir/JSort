@@ -1,9 +1,9 @@
 module BetheBloch
 
-export Material, Particle, Banana
+export Banana
 
-include("material.jl")
-include("particle.jl")
+#include("material.jl")
+#include("particle.jl")
 include("banana.jl")
 
 end

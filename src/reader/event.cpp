@@ -180,7 +180,7 @@ bool Event::decodeWord(unsigned int word){
 
 void Event::removePileup(){
     // Remove multiple Δe hitting the save back detector
-    bool bad_indices[32] = {false};
+    bool bad_indices[64] = {false};
     unsigned int bad_elements = 0;
     for (std::size_t i = 0; i < de_num; ++i) {
         for (std::size_t j = i+1; j < de_num; ++j) {

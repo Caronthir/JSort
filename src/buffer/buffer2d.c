@@ -14,6 +14,7 @@ Buffer2D *makeBufferW2D(const char *fname) {
 
 void close2D(Buffer2D* buffer){
     write2D(buffer);
+    fclose(buffer->handle);
     free(buffer);
 }
 
@@ -22,6 +23,7 @@ bool write2D(Buffer2D* buffer){
     printf("Buffer pointer is outside of buffer size");
     return false;
   }
+  //printf("Writing %lu bytes", 2*buffer->i);
   fwrite(buffer->vals, sizeof(unsigned int), 2*buffer->i, buffer->handle);
   //fflush(buffer->handle);
   buffer->i = 0;

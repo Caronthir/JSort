@@ -11,7 +11,7 @@ struct Banana{T}
 end
 
 function Banana(filename::Union{String, IO})
-    rows = Vector{Float64}[]
+    rows = Vector{Float32}[]
     poly = nothing
     for line in readlines(filename)
         tokens = split(line, r",?\s+")
@@ -20,18 +20,19 @@ function Banana(filename::Union{String, IO})
                 a0 = tokens[5][1:end-3]
                 a1 = tokens[8]
                 a2 = tokens[11][1:end-8]
-                poly = Poly(parse.(Float64, [a0, a1, a2]))
+                (a0, a1, a2) = parse.(Float32, [a0, a1, a2])
+                poly = Poly{Float32}([a0*1e3, a1, a2/1e3])
             end
             continue
         end
         try
-          push!(rows, parse.(Float64, tokens))
+          push!(rows, parse.(Float32, tokens))
         catch ArgumentError
             continue
         end
     end
     rows = hcat(rows...)
-    Banana{Float64}([rows[i, :] for i in 1:6]..., poly)
+    Banana{Float32}([rows[i, :] for i in 1:6]..., poly)
 end
 
 function smash(banana::Banana)

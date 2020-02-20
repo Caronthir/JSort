@@ -4,13 +4,19 @@ using Distributions: Poisson, rand
 import PyPlot; const plt = PyPlot
 import PyCall
 using ImageFiltering: imfilter, imfilter!, Kernel
-import CSV
-using DataFrames
 using Base.Filesystem: splitext
 
 function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin", referenceid=1
-                        ;weight::Weight=ThresholdSum(.3), metric::Function=L2, savepath::String="../figures/",
+                        ;weight::Weight=ThresholdSum(.3), metric::Function=L2, savepath::String="",
                         neighbourwidth=9, neighbourthreshold=80, plot=false)
+    # Set savepath to `path` if it is not specified.
+    # Save figures in a .figures subfolder
+    if length(savepath) == 0
+        savepath = path
+    end
+    savepath = joinpath(savepath, "figures")
+    println("Saving to $savepath")
+    mkpath(savepath)
     # Sort all back detectors corresponding to common front detectors
     frontdetectors = Dict(front => Dict{Int,String}() for front in 1:8)
     # Find all files
@@ -43,48 +49,52 @@ function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin
 	models = [model..., models...]
 	names = [name..., names...]
 
-    coefficientsx = []
-    coefficientsy = []
+    joinp(x) = joinpath(path, x)
 
-    function readfile(fname::AbstractString)
-        path_ = joinpath(path, fname)
-        if splitext(fname)[2] == ".bin"
-            readede(path_) |> x -> DataFrame(x, [:e, :Δe])
-        elseif splitext(fname)[2] == ".csv"
-            CSV.read(path_, header=["e", "Δe"], datarow=2) |> DataFrame
-        end
-    end
-
+    coefficientsx = [Float64[] for f in 1:8, b in 1:8]
+    coefficientsy = [Float64[] for f in 1:8, b in 1:8]
 
     for (front, backdetectors) in frontdetectors
         reference_fname = backdetectors[referenceid]
-        reference_df = readfile(reference_fname)
-        edges = histogram_edges(reference_df[!, :e], reference_df[!, :Δe], nbins=1000)
-        reference_raw = JSort.histogram(reference_df[!, :e], reference_df[!, :Δe], edges...)
-        fig, ax = plt.subplots()
-        ax.matshow(reference_raw)
+        reference_df = ParticleDetector(reference_fname |> joinp)
+        #edges = histogram_edges(reference_df[!, :e], reference_df[!, :Δe], nbins=1000)
+        edges = histogram_edges(reference_df.e, reference_df.Δe, nbins=1000)
+        reference_raw = JSort.histogram(reference_df.e, reference_df.Δe, edges...)
+        # fig, ax = plt.subplots()
+        # ax.matshow(transpose(reference_raw) .|> log10)
+        # ax.invert_yaxis()
+        # ax.set_title("Reference #$referenceid - Raw")
         reference = neighbourreduce(reference_raw, width=neighbourwidth, threshold=neighbourthreshold)
-        fig, ax = plt.subplots()
-        ax.matshow(reference)
-        total = copy(reference_raw)
+        # fig, ax = plt.subplots()
+        # ax.matshow(transpose(reference) .|> log10)
+        # ax.set_title("Reference #$referenceid - Reduced")
+        if plot
+        # ax.invert_yaxis()
+          total = copy(reference_raw)
+          alltotal = (e=copy(reference_df.e), Δe=copy(reference_df.Δe))
+        end
         for (back, fname) in backdetectors
             if back == referenceid
-                push!(coefficientsx, [front, back, 0.0, 1.0])
-                push!(coefficientsy, [front, back, 0.0, 1.0])
+                coefficientsx[front, back] = [0.0, 1.0]
+                coefficientsy[front, back] = [0.0, 1.0]
                 continue
             end
-            target_df = readfile(fname)
-            target_raw = JSort.histogram(target_df[!, :e], target_df[!, :Δe], edges...)
+            target_df = ParticleDetector(fname |> joinp)
+            target_raw = JSort.histogram(target_df.e, target_df.Δe, edges...)
+            # fig, ax = plt.subplots()
+            # ax.matshow(transpose(target_raw) .|> log10)
+            # ax.set_title("Target b#$back - Raw")
+            # ax.invert_yaxis()
             target = neighbourreduce(target_raw, width=neighbourwidth, threshold=80)
 
             points = featurealign2d_weighted(reference, target, numregions=15,
                                              limit=1000, searchwidth=40, weight=weight,
                                              metric=metric)
-            @show points
+            #@show points
             rpx, tpx, rpy, tpy, weights = points
-            annotate_plot_2d(target, tpx, tpy, weights)
-            plt.show()
-            return
+            # annotate_plot_2d(target, tpx, tpy, weights)
+            # plt.show()
+            # return
             # Convert from index basis to energy basis
             rex, tex = edges[1][rpx], edges[1][tpx]
             rey, tey = edges[2][rpy], edges[2][tpy]
@@ -100,8 +110,8 @@ function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin
 				px = Poly(coeffx)
 				py = Poly(coeffy)
 
-                e =  px.(target_df[!, :e])
-                de = py.(target_df[!, :Δe])
+                e =  px.(target_df.e)
+                de = py.(target_df.Δe)
 
                 calibrated = JSort.histogram(e, de, edges...);
 
@@ -118,10 +128,13 @@ function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin
 			end
             println("Optimal is $(optimal[1]) with $(optimal[2])")
             name, err_ca, err_un, coeffx, coeffy, calibrated = optimal
-            push!(coefficientsx, [front, back, coeffx...])
-            push!(coefficientsy, [front, back, coeffy...])
-            total .+= calibrated
+            coefficientsx[front, back] = coeffx
+            coefficientsy[front, back] = coeffy
             if plot
+                total .+= calibrated
+                append!(alltotal.e, Poly(coeffx).(target_df.e))
+                append!(alltotal.Δe, Poly(coeffy).(target_df.Δe))
+
               fig, ax = plt.subplots(ncols=2, nrows=2, sharex=true, sharey=true,
                                     figsize=(20, 20))
               # ax[1].matshow(transpose(reference) .|> log10)
@@ -146,7 +159,7 @@ function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin
               ax[4].invert_yaxis()
               ax[4].annotate(string(err_ca), xy=(1,0), xycoords="axes fraction",
                             horizontalalignment="right", verticalalignment="bottom")
-              fig.savefig(joinpath(savepath, "medef$(front)b$(back).png"), bbox_inches="tight", dpi=196)
+              fig.savefig(joinpath(savepath, "edef$(front)b$(back).png"), bbox_inches="tight", dpi=196)
               plt.close();
 
               fig, ax = plt.subplots(ncols=2, nrows=2, figsize=(10, 10))
@@ -160,8 +173,16 @@ function featurealign2d(path::String, pattern::Regex=r"edeb(?<b>\d)f(?<f>\d).bin
           fig, ax = plt.subplots()
           ax.matshow(total' .|> log10)
           ax.invert_yaxis()
-          fig.savefig(joinpath(savepath, "medef$front.png"), bbox_inches="tight", dpi=196)
+          fig.savefig(joinpath(savepath, "edef$front.png"), bbox_inches="tight", dpi=196)
           plt.close();
+            fig, ax = plt.subplots()
+            t = histogram(alltotal.e, alltotal.Δe, edges...)
+            ax.matshow(t' .|> log10)
+            ax.invert_yaxis()
+            fig.savefig(joinpath(savepath, "tedef$front.png"), bbox_inches="tight", dpi=196)
+            plt.close();
+            p = ParticleDetector(alltotal.e, alltotal.Δe, 1, 1)
+            write(joinpath(savepath, "edef$front.bin"), p)
         end
     end
     coefficientsx, coefficientsy
@@ -199,7 +220,7 @@ function featurealign2d(reference, target; numregions=5, width=nothing,
 end
 
 function featurealign2d_weighted(reference, target; numregions=5, width=nothing,
-                                 searchwidth=50, smoother=nothing, limit=50, 
+                                 searchwidth=50, smoother=nothing, limit=50,
                                  metric::Function=L2,
                                  weight::Weight=ThresholdArea(.2))
     if !isnothing(smoother)
@@ -347,6 +368,33 @@ function featureoverlap2d_ensemble(feature, target, searchwidth, N::Number, memb
     # [(mid[1]-wx):(mid[1]+wx), (mid[2]-wy):(mid[2]+wy)]
 end
 
+function automap(mat; width=50, searchwidth=100, metric=L2, weight=WellSum(4),
+                 limit=50)
+    score = similar(mat)
+    I, J = size(mat)
+    w = width÷2 |> Int
+    sw = searchwidth÷2 |> Int
+    template = @view mat[1:2, 1:2]
+    searcharea = @view mat[1:2, 1:2]
+    scores = Matrix(undef, searchwidth-width, searchwidth-width)
+    @inbounds for i in 1:I, j in 1:J
+        # Skip points `width` from the edge
+        if !(searchwidth ≤ j ≤ (J-searchwidth)) || !(searchwidth ≤ i ≤ (I-searchwidth))
+            score[i, j] = zero(eltype(mat))
+            continue
+        end
+        template = @view mat[i-w:i+w-1, j-w:j+w-1]
+        if sum(template) < limit
+            score[i, j] = zero(eltype(mat))
+            continue
+        end
+        searcharea = @view mat[i-sw:i+sw-1, j-sw:j+sw-1]
+        slidingwindow!(scores, searcharea, template, metric)
+        score[i, j] = weight(scores)
+    end
+    score
+end
+
 function squarefrommidpoint(midpoint, width)
     squarefrommidpoint(midpoint, width...)
 end
@@ -380,6 +428,17 @@ function slidingwindow(reference::AbstractMatrix, target::AbstractMatrix,
                                                   window[2] .+ j .- 1])
     end
     return distance
+end
+
+function slidingwindow!(score::AbstractMatrix, reference::AbstractMatrix, template::AbstractMatrix, metric::Function)
+    # Slide the template across the entire reference
+    iw, jw = size(reference) .- size(template)
+    w1, w2 = size(template)
+    for i in 1:iw
+        @simd for j in 1:jw
+            score[i, j] = metric(template, @view reference[i:w1+i-1, j:w2+j-1])
+        end
+    end
 end
 
 
@@ -452,9 +511,6 @@ function arraybox(array, startx::T, stopx::T, starty::T, stopy::T) where T <: In
     subarray = view(array, startx:stopx, starty:stopy)
 end
 
-# function splitregions2d(array::OMatrix{T}, numberofregions; width=nothing, limit=50) where T
-#     splitregions2d(array, numberofregions, width=width, limit=limit)
-# end
 
 function splitregions2d(array, numberofregions; width=nothing, limit=50)
     edges = boxbounds(array, numberofregions, width=width)

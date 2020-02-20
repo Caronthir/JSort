@@ -14,11 +14,9 @@ Buffer* makeBufferR(const char* fname){
     return buffer;
 }
 
-void initBuffer(void *buffer_) {
-    Buffer* buffer = (Buffer*) buffer_;
-    buffer->i = 0;
-    buffer->size = BUFFER_SIZE;
-    buffer->good = false;
+Buffer *makeBufferW(const char *fname) {
+  Buffer *buffer = makeBuffer(fname, "wb");
+  return buffer;
 }
 
 bool open(void *buffer_, const char *fname, const char *mode) {
@@ -34,7 +32,16 @@ bool open(void *buffer_, const char *fname, const char *mode) {
 }
 
 void close(Buffer* buffer){
+    write(buffer);
+    fclose(buffer->handle);
     free(buffer);
+}
+
+void initBuffer(void *buffer_) {
+  Buffer *buffer = (Buffer *)buffer_;
+  buffer->i = 0;
+  buffer->size = BUFFER_SIZE;
+  buffer->good = false;
 }
 
 bool read(Buffer* buffer){
@@ -85,6 +92,12 @@ inline void increment(void* buffer_){
     if (buffer->i >= buffer->size && buffer->size != BUFFER_SIZE){
         buffer->good = false;
     }
+}
+
+void fill(Buffer* buffer, unsigned int x){
+  buffer->vals[buffer->i] = x;
+  increment(buffer);
+  conditionalWrite(buffer);
 }
 
 bool good(void *buffer) { return ((Buffer *)buffer)->good; };

@@ -13,10 +13,11 @@ class Qkinz:
         self.data = self.data_.copy()
         self.artists = []
         self.ax = None
+        self.active = True
 
     @staticmethod
     def read(path: Path):
-        with open(path) as infile:
+        with path.open() as infile:
             lines = infile.readlines()
 
         a0, a1, a2 = 0, 0, 0
@@ -37,8 +38,8 @@ class Qkinz:
     def plot(self, ax):
         self.ax = ax
         line = ax.errorbar(self.data.e, self.data.Δe,
-                    xerr=self.data.de, yerr=self.data.dΔe,
-                    fmt='k-o')
+                           xerr=self.data.de, yerr=self.data.dΔe,
+                           fmt='k-o')
         self.artists.append(line)
         for i, row in self.data.iterrows():
             box = TextArea(str(i))
@@ -54,6 +55,3 @@ class Qkinz:
         self.artists = []
         self.plot(self.ax)
         self.ax.figure.canvas.draw_idle()
-
-
-
